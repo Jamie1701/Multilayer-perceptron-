@@ -41,7 +41,7 @@ class NeuralNetwork:
             np.ndarray: Output of the final layer.
         """
         Z_values = {}
-        A_values = {}
+        A_values = {0: input_matrix}
         self.input_matrix_shape = input_matrix.shape[0]
 
         for i, layer in enumerate(self.nn_structure):
@@ -56,6 +56,9 @@ class NeuralNetwork:
                 A = np.maximum(0, Z)
             elif activation == "none":
                 A = Z
+            elif activation == "softmax":
+                exp_Z = np.exp(Z - np.max(Z, axis=1, keepdims=True))
+                A = exp_Z / np.sum(exp_Z, axis=1, keepdims=True)
             else:
                 raise ValueError(f"Unsupported activation function: {activation}")
 
@@ -86,49 +89,61 @@ class NeuralNetwork:
             return np.mean(self.last_error_residual ** 2)
 
         elif loss_type == "cross_entropy":
-            # Cross-Entropy Loss with Softmax
+            # cross-entropy with softmax
             epsilon = 1e-12  # avoid log(0)
             Y_hat_clipped = np.clip(Y_hat, epsilon, 1 - epsilon) 
             cross_entropy_loss = -np.sum(y_true * np.log(Y_hat_clipped)) / y_true.shape[0]
+            self.last_error_residual = Y_hat_clipped - y_true
             return cross_entropy_loss
 
         else:
             raise ValueError(f"Unsupported loss type: {loss_type}")
     
     
-    def backward_pass(self):
+    def backward_pass(self, y_true):
         """
-        Backpropagation to update weights and biases
+        Perform backpropagation to compute gradients of weights and biases.
         """
         grad_L_wrt_weight = {}
         grad_L_wrt_biases = {}
         delta_l = {}
 
-        for index, layer in enumerate(reversed(self.nn_structure)):
+        for index, layer in enumerate(self.nn_structure[::-1]):
             layer_index = len(self.nn_structure) - index
 
             if layer_index == len(self.nn_structure):
-                # Output layer
-                activation = layer["activation"]
-                if activation in {"sigmoid", "relu", "none"}:
+                if layer["activation"] == "softmax":
+                    delta_l[layer_index] = self.A_values[layer_index] - y_true
+                    
+                elif layer["activation"] == "sigmoid":
                     delta_l[layer_index] = (-2 / self.A_values[layer_index].shape[0]) * self.last_error_residual
+                    
+                elif layer["activation"] == "relu":
+                    delta_l[layer_index] = (-2 / self.A_values[layer_index].shape[0]) * self.last_error_residual
+                    
+                elif layer["activation"] == "none":
+                    delta_l[layer_index] = self.last_error_residual
+
             else:
-                # Hidden layers
                 activation = layer["activation"]
                 prev_delta = delta_l[layer_index + 1]
                 weight_next = self.weights[layer_index + 1]
 
                 if activation == "sigmoid":
-                    delta_l[layer_index] = np.dot(prev_delta, weight_next.T) * (self.A_values[layer_index] * (1 - self.A_values[layer_index]))
+                    delta_l[layer_index] = np.dot(prev_delta, weight_next.T) * (
+                        self.A_values[layer_index] * (1 - self.A_values[layer_index]))
+                    
                 elif activation == "relu":
                     delta_l[layer_index] = np.dot(prev_delta, weight_next.T) * (self.Z_values[layer_index] > 0)
+                    
                 elif activation == "none":
                     delta_l[layer_index] = np.dot(prev_delta, weight_next.T)
-                else:
-                    raise ValueError(f"Unsupported activation function: {activation}")
 
             if layer_index > 1:
                 grad_L_wrt_weight[layer_index] = np.dot(self.A_values[layer_index - 1].T, delta_l[layer_index])
+                grad_L_wrt_biases[layer_index] = np.sum(delta_l[layer_index], axis=0)
+            elif layer_index == 1:  # Input layer
+                grad_L_wrt_weight[layer_index] = np.dot(self.A_values[0].T, delta_l[layer_index])
                 grad_L_wrt_biases[layer_index] = np.sum(delta_l[layer_index], axis=0)
 
         self.grad_L_wrt_weight = grad_L_wrt_weight
@@ -139,11 +154,8 @@ class NeuralNetwork:
         Update the network's weights and biases using computed gradients.
         
         Args:
-            learning_rate (float): Learning rate (eta) for gradient descent.
+            learning_rate (float): Learning rate for gradient descent.
         """
-        for i, _ in enumerate(self.nn_structure):
-            layer_index = i + 1
-
-            if layer_index > 1 and layer_index <= len(self.nn_structure):
-                self.weights[layer_index] -= learning_rate * self.grad_L_wrt_weight[layer_index]
-                self.biases[layer_index] -= learning_rate * self.grad_L_wrt_biases[layer_index]
+        for layer_index in range(1, len(self.nn_structure) + 1):
+            self.weights[layer_index] -= (learning_rate * self.grad_L_wrt_weight[layer_index])
+            self.biases[layer_index] -= (learning_rate * self.grad_L_wrt_biases[layer_index])
